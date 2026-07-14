@@ -1,0 +1,8 @@
+{
+  "name": "Firestorm Chess",
+  "description": "An interactive chess application featuring a simulated 1600 ELO engine, dynamic Google Calendar holiday-theming (Halloween, Christmas, July 4th), and a complete exportable/copyable Python implementation of the bot.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function incoming() {
+      return request.resource.data;
+    }
+    
+    function existing() {
+      return resource.data;
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    
+    // Validation Blueprints
+    function isValidRLMemory(data) {
+      return data.keys().hasAll(['games_played', 'bot_wins', 'bot_losses', 'bot_draws', 'q_table', 'recent_learnings']) &&
+             data.keys().size() == 6 &&
+             data.games_played is number &&
+             data.bot_wins is number &&
+             data.bot_losses is number &&
+             data.bot_draws is number &&
+             data.q_table is string &&
+             data.q_table.size() <= 1000000 &&
+             data.recent_learnings is string &&
+             data.recent_learnings.size() <= 1000000;
+    }
+
+    function isValidHistory(data) {
+      return data.keys().hasAll(['history']) &&
+             data.keys().size() == 1 &&
+             data.history is string &&
+             data.history.size() <= 1000000;
+    }
+
+    function isValidLobbyChat(data) {
+      return data.keys().hasAll(['sender', 'text', 'timestamp']) &&
+             data.keys().size() == 3 &&
+             data.sender is string &&
+             data.sender.size() <= 100 &&
+             data.text is string &&
+             data.text.size() <= 5000 &&
+             data.timestamp is number;
+    }
+
+    // Rules for game_data collection
+    match /game_data/{docId} {
+      allow get: if isValidId(docId) && (docId == 'rl_memory' || docId == 'history');
+      
+      allow create: if isValidId(docId) && (
+        (docId == 'rl_memory' && isValidRLMemory(incoming())) ||
+        (docId == 'history' && isValidHistory(incoming()))
+      );
+      
+      allow update: if isValidId(docId) && (
+        (docId == 'rl_memory' && isValidRLMemory(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['games_played', 'bot_wins', 'bot_losses', 'bot_draws', 'q_table', 'recent_learnings'])) ||
+        (docId == 'history' && isValidHistory(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['history']))
+      );
+    }
+
+    // Rules for lobby_chat collection
+    match /lobby_chat/{msgId} {
+      allow read: if true;
+      allow create: if isValidLobbyChat(incoming());
+      allow delete: if true;
+    }
+
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

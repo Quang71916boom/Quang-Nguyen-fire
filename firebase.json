@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-firestormchess-f7f3a844-2a83-4834-a997-72a7c67779b5",
+      "rules": "firestore.rules"
+    }
+  ]
+}

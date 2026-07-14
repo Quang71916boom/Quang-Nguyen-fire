@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "RLMemory": {
+      "title": "RL Memory",
+      "description": "The reinforcement learning data",
+      "type": "object",
+      "properties": {
+        "games_played": { "type": "number" },
+        "bot_wins": { "type": "number" },
+        "bot_losses": { "type": "number" },
+        "bot_draws": { "type": "number" },
+        "q_table": { "type": "string" },
+        "recent_learnings": { "type": "string" }
+      }
+    },
+    "MatchHistory": {
+      "title": "Match History",
+      "description": "The match history stringified",
+      "type": "object",
+      "properties": {
+        "history": { "type": "string" }
+      }
+    },
+    "LobbyChat": {
+      "title": "Lobby Chat Message",
+      "description": "A message sent in the lobby chat",
+      "type": "object",
+      "properties": {
+        "sender": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["sender", "text", "timestamp"]
+    }
+  },
+  "firestore": {
+    "game_data/{docId}": {
+      "schema": "RLMemory",
+      "description": "Stores rl_memory and history documents"
+    },
+    "lobby_chat/{msgId}": {
+      "schema": "LobbyChat",
+      "description": "Lobby chat messages"
+    }
+  }
+}
