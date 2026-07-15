@@ -2803,6 +2803,16 @@ def on_analysis_live_click(event):
     set_view_index(-1)
 
 
+def on_analysis_first_click(event):
+    if move_history:
+        set_view_index(0)
+
+
+def on_analysis_last_click(event):
+    if move_history:
+        set_view_index(len(move_history) - 1)
+
+
 def update_history_ui():
     history_list = load_matches_history()
     container = document.getElementById("history-container")
@@ -2832,13 +2842,47 @@ def update_history_ui():
                     <span class="text-[10px] text-gray-500 font-medium uppercase">Move Sequence:</span>
                     <textarea class="w-full bg-[#1E212A] border border-[#2D3343] rounded-lg p-1.5 text-[10px] text-gray-300 font-mono h-12 resize-none" readonly>{san_sequence}</textarea>
                 </div>
-                <button onclick="window.analyzeHistoricMatch('{h['id']}')" class="mt-1 w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-[11px] transition duration-200">
-                    🔬 Analyze Game with GM Garry
-                </button>
+                <div class="flex gap-2 mt-1">
+                    <button onclick="window.analyzeHistoricMatch('{h['id']}')" class="flex-grow py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-[11px] transition duration-200">
+                        🔬 Analyze with GM Garry
+                    </button>
+                    <button onclick="window.copyHistoricPgn('{h['id']}')" class="px-3 py-1.5 bg-[#2D3343] hover:bg-[#3E465B] text-gray-300 hover:text-white font-medium rounded-lg text-[11px] transition duration-200" title="Copy PGN to Clipboard">
+                        📋 Copy PGN
+                    </button>
+                </div>
             """
             container.appendChild(div)
     else:
         container.innerHTML = '<div class="text-xs text-gray-500 py-4 text-center">No historic records saved yet. Complete a full match!</div>'
+
+
+def copy_historic_pgn(match_id):
+    history_list = load_matches_history()
+    for h in history_list:
+        if str(h.get("id")) == str(match_id):
+            saved_pgn = h.get("pgn")
+            if not saved_pgn:
+                # Dynamically construct PGN
+                date_str = h.get("date", "").split(" ")[0].replace("-", ".") if h.get("date") else "2026.07.15"
+                p_col = h.get("playerColor", "White")
+                white_name = "Human" if p_col == "White" else h.get("opponent", "Opponent")
+                black_name = "Human" if p_col == "Black" else h.get("opponent", "Opponent")
+                game_result = "1-0" if h.get("result") == "won" and p_col == "White" else "0-1" if h.get("result") == "won" and p_col == "Black" else "0-1" if h.get("result") == "lost" and p_col == "White" else "1-0" if h.get("result") == "lost" and p_col == "Black" else "1/2-1/2"
+                san_sequence = " ".join([m.get("san", "") for m in h.get("history", [])])
+                saved_pgn = f"""[Event "Firestorm Chess Match"]
+[Site "Local Browser"]
+[Date "{date_str}"]
+[Round "1"]
+[White "{white_name}"]
+[Black "{black_name}"]
+[Result "{game_result}"]
+
+{san_sequence}"""
+            
+            # call window.copyToClipboard in javascript
+            window.copyToClipboard(saved_pgn)
+            return True
+    return False
 
 
 def update_pgn():
@@ -2966,6 +3010,22 @@ def handle_game_over(result, outcome_str):
     # Match Archive
     import random
     m_history = load_matches_history()
+    
+    pgn_moves = [m.get("san", "") for m in move_history]
+    white_name = "Human" if mode == "human" and player_color == chess.WHITE else f"{current_opponent_name} ({bot_elo})" if mode == "human" else "Self-Play White"
+    black_name = "Human" if mode == "human" and player_color == chess.BLACK else f"{current_opponent_name} ({bot_elo})" if mode == "human" else "Self-Play Black"
+    game_res_str = result if result else "*"
+    date_str = datetime.datetime.now().strftime("%Y.%m.%d")
+    match_pgn = f"""[Event "Firestorm Chess Match"]
+[Site "Local Browser"]
+[Date "{date_str}"]
+[Round "1"]
+[White "{white_name}"]
+[Black "{black_name}"]
+[Result "{game_res_str}"]
+
+{" ".join(pgn_moves)}"""
+
     m_history.append({
         "id": str(random.randint(100000, 999999)),
         "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -2974,7 +3034,8 @@ def handle_game_over(result, outcome_str):
         "playerColor": "White" if mode == "human" and player_color == chess.WHITE else "Black" if mode == "human" else "Spectator",
         "result": "won" if res_str == "win" or res_str == "white_win" else "lost" if res_str == "loss" or res_str == "black_win" else "draw",
         "outcomeDetail": outcome_str,
-        "history": list(move_history)
+        "history": list(move_history),
+        "pgn": match_pgn
     })
     save_matches_history(m_history)
     
@@ -3647,6 +3708,7 @@ window.setViewIndex = create_proxy(set_view_index)
 window.importPgnGame = create_proxy(import_pgn_game)
 window.importFenGame = create_proxy(import_fen_game)
 window.renderBoard = create_proxy(render_board)
+window.copyHistoricPgn = create_proxy(copy_historic_pgn)
 
 
 # --- Bootstrapping Event Listeners Setup ---
@@ -3660,6 +3722,13 @@ def setup_event_listeners():
     document.getElementById("btn-analysis-prev").addEventListener("click", create_proxy(on_analysis_prev_click))
     document.getElementById("btn-analysis-next").addEventListener("click", create_proxy(on_analysis_next_click))
     document.getElementById("btn-analysis-live").addEventListener("click", create_proxy(on_analysis_live_click))
+    
+    # Board-under navigation buttons
+    document.getElementById("btn-board-first").addEventListener("click", create_proxy(on_analysis_first_click))
+    document.getElementById("btn-board-prev").addEventListener("click", create_proxy(on_analysis_prev_click))
+    document.getElementById("btn-board-next").addEventListener("click", create_proxy(on_analysis_next_click))
+    document.getElementById("btn-board-last").addEventListener("click", create_proxy(on_analysis_last_click))
+    document.getElementById("btn-board-live").addEventListener("click", create_proxy(on_analysis_live_click))
     
     # Dropdowns & Forms
     document.getElementById("select-from").addEventListener("change", create_proxy(on_from_change))
