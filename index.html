@@ -665,60 +665,20 @@
                                 </div>
                             </div>
                             
-                            <!-- Move Input Form -->
-                            <div id="move-input-section" class="bg-[#1E212A] border border-[#2D3343] p-5 rounded-xl flex flex-col gap-4">
-                                <h4 class="text-sm font-medium text-white flex items-center gap-2">
-                                    <span class="w-2 h-2 rounded-full bg-indigo-500"></span>
-                                    Execute Tactical Move
-                                </h4>
-                                <p class="text-xs text-gray-400 -mt-2 leading-relaxed">
-                                    Click a piece on the board to see legal moves and make moves directly. During the opponent's turn, make a move to register a <b>premove</b> (indicated in red/orange). Right-click to cancel selection or premove.
-                                </p>
-                                
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div class="flex flex-col gap-1.5">
-                                        <label class="text-[10px] text-gray-400 font-medium uppercase">Piece Coordinates</label>
-                                        <select id="select-from" class="bg-[#0E0F11] border border-[#2D3343] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
-                                            <option value="">-- Choose Square --</option>
-                                        </select>
-                                    </div>
-                                    <div class="flex flex-col gap-1.5">
-                                        <label class="text-[10px] text-gray-400 font-medium uppercase">Destination</label>
-                                        <select id="select-to" class="bg-[#0E0F11] border border-[#2D3343] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500" disabled>
-                                            <option value="">-- Select Destination --</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                
-                                <div id="promo-section" class="hidden flex flex-col gap-1.5">
-                                    <label class="text-[10px] text-gray-400 font-medium uppercase">Promotion Piece</label>
-                                    <select id="select-promo" class="bg-[#0E0F11] border border-[#2D3343] rounded-lg px-3 py-2 text-sm text-white focus:outline-none">
-                                        <option value="q">Queen</option>
-                                        <option value="r">Rook</option>
-                                        <option value="b">Bishop</option>
-                                        <option value="n">Knight</option>
-                                    </select>
-                                </div>
-                                
-                                <button id="btn-push-move" class="w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-medium py-2.5 px-4 rounded-xl transition duration-200 shadow-lg shadow-indigo-600/10 flex items-center justify-center gap-2">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                                    </svg>
-                                    Execute Coordinates
-                                </button>
-                                
-                                <div class="text-center">
-                                    <span class="text-[10px] text-gray-500 font-medium">OR QUICK SELECT</span>
-                                </div>
-                                
-                                <div class="flex gap-2">
-                                    <select id="select-quick-san" class="flex-grow bg-[#0E0F11] border border-[#2D3343] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
-                                        <option value="">-- Quick Move Selection (SAN) --</option>
-                                    </select>
-                                    <button id="btn-quick-move" class="bg-[#2D3343] hover:bg-[#3E465B] text-white px-4 py-2 rounded-lg font-medium text-xs transition duration-200 border border-[#3E465B]">
-                                        Quick Go
-                                    </button>
-                                </div>
+                            <!-- Hidden elements to preserve compatibility with pyodide engine -->
+                            <div class="hidden">
+                                <select id="select-from"></select>
+                                <select id="select-to"></select>
+                                <select id="select-promo">
+                                    <option value="q">Queen</option>
+                                    <option value="r">Rook</option>
+                                    <option value="b">Bishop</option>
+                                    <option value="n">Knight</option>
+                                </select>
+                                <div id="promo-section" class="hidden"></div>
+                                <button id="btn-push-move"></button>
+                                <select id="select-quick-san"></select>
+                                <button id="btn-quick-move"></button>
                             </div>
                         </div>
                         

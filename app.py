@@ -210,6 +210,26 @@ def populate_opening_book():
         print("Loaded Capablanca and Carlsen GM database! Entries:", len(GM_DB))
     except Exception as e:
         print("Could not load gm_db:", e)
+
+    try:
+        from carlsen_stockfish_db import CARLSEN_GAMES_BOOK, STOCKFISH_17_1_GAMES_BOOK
+        # Load Magnus Carlsen's 250 best games
+        for fen, moves in CARLSEN_GAMES_BOOK.items():
+            if fen not in book:
+                book[fen] = []
+            for m in moves:
+                if m not in book[fen]:
+                    book[fen].append(m)
+        # Load Stockfish 17.1's 250 best games
+        for fen, moves in STOCKFISH_17_1_GAMES_BOOK.items():
+            if fen not in book:
+                book[fen] = []
+            for m in moves:
+                if m not in book[fen]:
+                    book[fen].append(m)
+        print("Loaded Magnus Carlsen's best 250 games and Stockfish 17.1's best 250 games databases!")
+    except Exception as e:
+        print("Could not load carlsen_stockfish_db:", e)
                 
     return book
 
@@ -558,6 +578,33 @@ class PurePythonChessEngine:
                             if p and p.color == chess.BLACK and p.piece_type in (chess.ROOK, chess.QUEEN):
                                 score -= 35
 
+        if personality == "FireStorm":
+            try:
+                # Add Magnus Carlsen central outpost knights preference and Stockfish active open file rooks preference
+                for sq in chess.SQUARES:
+                    piece = board.piece_at(sq)
+                    if piece:
+                        if piece.piece_type == chess.KNIGHT:
+                            if piece.color == chess.WHITE and sq in [chess.D5, chess.E5]:
+                                score += 35
+                            elif piece.color == chess.BLACK and sq in [chess.D4, chess.E4]:
+                                score -= 35
+                        elif piece.piece_type == chess.ROOK:
+                            file_idx = chess.square_file(sq)
+                            open_file = True
+                            for r in range(8):
+                                check_p = board.piece_at(chess.square(file_idx, r))
+                                if check_p and check_p.piece_type == chess.PAWN:
+                                    open_file = False
+                                    break
+                            if open_file:
+                                if piece.color == chess.WHITE:
+                                    score += 25
+                                else:
+                                    score -= 25
+            except Exception:
+                pass
+
         return score
 
     def order_moves(self, board: chess.Board, moves: list[chess.Move]) -> list[chess.Move]:
@@ -612,6 +659,13 @@ class PurePythonChessEngine:
                 from_sq = move.from_square
                 if board.is_attacked_by(not board.turn, from_sq):
                     prio += 500
+
+            if personality == "FireStorm":
+                try:
+                    from carlsen_stockfish_db import get_master_move_bonus
+                    prio += get_master_move_bonus(board, move, personality)
+                except Exception:
+                    pass
                     
             scored.append((move, prio))
             
