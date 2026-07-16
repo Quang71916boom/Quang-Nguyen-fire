@@ -733,28 +733,104 @@ class PurePythonChessEngine:
         self.nodes_visited = 0
         self.start_time = t0
         
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return self.evaluate_board(board), []
+            
+        ordered_root_moves = self.order_moves(board, legal_moves)
+        
         if self.personality == "FireStorm":
-            best_score = 0
+            best_score = -999999 if is_maximizing else 999999
             best_pv = []
             
-            # Iterative deepening search up to depth 50
-            for d in range(1, depth + 1):
-                try:
-                    score, pv = self.minimax(board, d, alpha, beta, is_maximizing)
-                    best_score = score
-                    if pv:
-                        best_pv = pv
-                except SearchTimeout:
-                    break
+            # Use strict time limit of 3.0 seconds for prediction analysis to prevent UI freezing
+            time_limit = self.time_limit or 3.0
             
-            if not best_pv:
+            thread_failed = False
+            try:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import os
+                
                 try:
-                    score, pv = self.minimax(board, 1, alpha, beta, is_maximizing)
-                    if pv:
-                        best_pv = pv
+                    num_workers = min(len(ordered_root_moves), os.cpu_count() or 4)
+                except Exception:
+                    num_workers = min(len(ordered_root_moves), 4)
+                    
+                # Search as far as possible (iterative deepening up to depth 12)
+                for d in range(1, 13):
+                    if time.time() - t0 >= time_limit * 0.8:
+                        break
+                        
+                    futures = {}
+                    completed_successfully = True
+                    results = []
+                    
+                    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                        for move in ordered_root_moves:
+                            board_copy = board.copy()
+                            board_copy.push(move)
+                            
+                            thread_engine = PurePythonChessEngine(
+                                use_quiescence=self.use_quiescence,
+                                q_table=self.q_table,
+                                time_limit=time_limit - (time.time() - t0),
+                                personality=self.personality
+                            )
+                            thread_engine.transposition_table = {}
+                            thread_engine.start_time = t0
+                            
+                            fut = executor.submit(
+                                thread_engine.minimax,
+                                board_copy,
+                                d - 1,
+                                alpha,
+                                beta,
+                                not is_maximizing
+                            )
+                            futures[fut] = move
+                            
+                        for fut in as_completed(futures):
+                            move = futures[fut]
+                            try:
+                                score, pv = fut.result()
+                                results.append((score, [move] + pv))
+                            except Exception:
+                                completed_successfully = False
+                                break
+                                
+                    if not completed_successfully or not results:
+                        break
+                        
+                    if is_maximizing:
+                        results.sort(key=lambda x: x[0], reverse=True)
+                    else:
+                        results.sort(key=lambda x: x[0])
+                        
+                    best_score, best_pv = results[0]
+            except Exception as e:
+                # ThreadPoolExecutor is either unsupported or failed in this browser/Pyodide environment.
+                # Gracefully fall back to single-threaded iterative deepening search.
+                thread_failed = True
+                
+            if thread_failed or not best_pv:
+                # Optimized single-threaded iterative deepening search up to depth 12
+                self.transposition_table = {}  # reset to fresh state
+                for d in range(1, 13):
+                    if time.time() - t0 >= time_limit * 0.8:
+                        break
+                    try:
+                        score, pv = self.minimax(board, d, alpha, beta, is_maximizing)
                         best_score = score
-                except SearchTimeout:
-                    pass
+                        if pv:
+                            best_pv = pv
+                    except SearchTimeout:
+                        break
+                
+            if not best_pv:
+                ordered = self.order_moves(board, legal_moves)
+                best_pv = [ordered[0]]
+                best_score = self.evaluate_board(board)
+                
             res = best_score, best_pv
         else:
             res = self.minimax(board, depth, alpha, beta, is_maximizing)
@@ -1220,6 +1296,8 @@ view_index = None
 manual_result = None
 manual_outcome_str = None
 is_historic_analysis = False
+coach_enabled = True
+resign_confirm_active = False
 
 def check_game_over(b):
     if b is board and manual_result is not None:
@@ -1354,11 +1432,11 @@ def render_board():
         else:
             nav_banner.classList.add("hidden")
             
-    # Run real-time GM Garry evaluation and prediction (at least 5 moves ahead)
+    # Run real-time FireStorm evaluation and prediction (multi-threaded, deep analysis)
     try:
-        run_garry_realtime_analysis()
+        run_firestorm_realtime_analysis()
     except Exception as e:
-        print("Error in Garry real-time analysis:", e)
+        print("Error in FireStorm real-time analysis:", e)
         
     try:
         generate_positional_coach_commentary()
@@ -1723,14 +1801,15 @@ def format_pv_moves(board, pv_list):
     return " ".join(formatted)
 
 
-def run_garry_realtime_analysis():
+def run_firestorm_realtime_analysis():
     global last_eval
     active_board = get_rendered_board()
-    engine = PurePythonChessEngine(use_quiescence=True, personality="Garry")
+    engine = PurePythonChessEngine(use_quiescence=True, personality="FireStorm")
     is_maximizing = active_board.turn == chess.WHITE
     
-    # GM Garry real-time analysis (predict minimum of 3 moves ahead)
-    score_cp, pv = engine.parallel_search(active_board, 3, -999999, 999999, is_maximizing)
+    # FireStorm real-time analysis: analyze as far as possible up to depth 8 using ThreadPoolExecutor
+    engine.time_limit = 3.0
+    score_cp, pv = engine.parallel_search(active_board, 8, -999999, 999999, is_maximizing)
     
     # Check for forced checkmate up to 3 moves (6 plies)
     mate_str = detect_checkmate_in_n(active_board, 3)
@@ -1960,6 +2039,28 @@ def update_status():
 
 
 def generate_positional_coach_commentary():
+    global coach_enabled
+    if not coach_enabled:
+        try:
+            document.getElementById("coach-text").innerHTML = """
+            <div class="text-center p-6 bg-slate-900/30 rounded-xl border border-slate-800 text-gray-400 text-xs flex flex-col items-center gap-2">
+                <span class="text-lg">📴</span>
+                <span class="font-semibold text-gray-300">Grandmaster Coach Commentary Disabled</span>
+                <span class="text-[10px] text-gray-500">You can re-enable the coach anytime using the toggle button above to get tactical advice and live commentary.</span>
+            </div>
+            """
+            coach_eval = document.getElementById("coach-eval")
+            coach_rating = document.getElementById("coach-rating")
+            if coach_eval:
+                coach_eval.innerText = "N/A"
+                coach_eval.className = "text-3xl font-semibold font-mono text-gray-500"
+            if coach_rating:
+                coach_rating.innerText = "Coach help is turned off"
+                coach_rating.className = "text-sm font-semibold text-gray-500"
+        except Exception as e:
+            print("Error setting disabled coach UI:", e)
+        return
+
     active_board = get_rendered_board()
     import random
     
@@ -3518,13 +3619,38 @@ def on_draw_click(event):
 
 
 def on_resign_click(event):
-    global manual_result, manual_outcome_str
+    global manual_result, manual_outcome_str, resign_confirm_active
     if check_game_over(board):
         return
         
-    if not window.confirm("Are you sure you want to resign?"):
+    btn = document.getElementById("btn-resign")
+    if not resign_confirm_active:
+        resign_confirm_active = True
+        if btn:
+            btn.innerHTML = '<span class="text-rose-400 font-bold">⚠️ Confirm?</span>'
+            btn.className = "px-3 py-2 bg-rose-600/20 text-rose-300 rounded-xl transition duration-200 border border-rose-500/40 flex items-center gap-1.5 text-xs font-semibold animate-pulse"
+        
+        # Reset after 3 seconds
+        def reset_resign():
+            global resign_confirm_active
+            if resign_confirm_active:
+                resign_confirm_active = False
+                cur_btn = document.getElementById("btn-resign")
+                if cur_btn:
+                    cur_btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3l18 18M3 21L21 3" /></svg>Resign'
+                    cur_btn.className = "px-3 py-2 bg-indigo-600/10 hover:bg-indigo-600 hover:text-white text-indigo-400 rounded-xl transition duration-200 border border-indigo-500/20 flex items-center gap-1.5 text-xs font-semibold"
+        
+        try:
+            window.setTimeout(create_proxy(reset_resign), 3000)
+        except Exception:
+            pass
         return
         
+    resign_confirm_active = False
+    if btn:
+        btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3l18 18M3 21L21 3" /></svg>Resign'
+        btn.className = "px-3 py-2 bg-indigo-600/10 hover:bg-indigo-600 hover:text-white text-indigo-400 rounded-xl transition duration-200 border border-indigo-500/20 flex items-center gap-1.5 text-xs font-semibold"
+
     if mode == "human":
         if player_color == chess.WHITE:
             manual_result = "0-1"
@@ -3685,6 +3811,20 @@ def on_clear_rl_click(event):
     window.alert("Reinforcement Learning Q-Table wiped successfully!")
 
 
+def on_toggle_coach_click(event):
+    global coach_enabled
+    coach_enabled = not coach_enabled
+    btn = document.getElementById("btn-toggle-coach")
+    if btn:
+        if coach_enabled:
+            btn.innerHTML = "📴 Disable Coach Help"
+            btn.className = "px-3.5 py-2 bg-rose-600/10 hover:bg-rose-600 hover:text-white text-rose-400 border border-rose-500/20 rounded-xl font-semibold text-xs transition duration-200 flex items-center gap-1.5 shadow-lg shadow-rose-600/5"
+        else:
+            btn.innerHTML = "💡 Enable Coach Help"
+            btn.className = "px-3.5 py-2 bg-indigo-600/10 hover:bg-indigo-600 hover:text-white text-indigo-400 border border-indigo-500/20 rounded-xl font-semibold text-xs transition duration-200 flex items-center gap-1.5 shadow-lg shadow-indigo-600/5"
+    generate_positional_coach_commentary()
+
+
 def start_lobby_match(opponent_name, opponent_elo, player_color_str, time_control_seconds):
     global board, move_history, move_analyses, last_eval, game_over_saved, self_play_autoplay, mode, player_color, bot_elo, current_opponent_name, game_time_limit, selected_square, premove_obj, last_rendered_fen
     board = chess.Board()
@@ -3809,6 +3949,9 @@ def setup_event_listeners():
     
     # RL Clear Weights Button
     document.getElementById("btn-clear-rl").addEventListener("click", create_proxy(on_clear_rl_click))
+    
+    # Toggle Coach Button
+    document.getElementById("btn-toggle-coach").addEventListener("click", create_proxy(on_toggle_coach_click))
 
 
 # --- Initialize UI ---
