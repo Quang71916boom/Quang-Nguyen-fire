@@ -1577,6 +1577,150 @@
             }
         };
 
+        // --- Helper functions for high-lifetime Cookies ---
+        const getCookie = (name) => {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return decodeURIComponent(parts.pop().split(';').shift());
+            return null;
+        };
+
+        const setCookie = (name, value, days = 36500) => {
+            const d = new Date();
+            d.setTime(d.getTime() + (days * 24 * 60 * 60 * 1000));
+            const expires = "expires=" + d.toUTCString();
+            document.cookie = `${name}=${encodeURIComponent(value)};${expires};path=/;SameSite=Strict;Secure`;
+        };
+
+        // --- Bulletproof Passkey Preserver ("Forever Save") ---
+        // Synchronizes and backs up passkeys across LocalStorage, 100-year Cookies, and IndexedDB.
+        window.getPasskeys = () => {
+            let localKeys = [];
+            try {
+                localKeys = JSON.parse(localStorage.getItem('chess_passkeys') || '[]');
+            } catch (e) {
+                console.warn("LocalStorage parse failed", e);
+            }
+
+            let cookieKeys = [];
+            try {
+                const cookieVal = getCookie('chess_passkeys_backup');
+                if (cookieVal) {
+                    cookieKeys = JSON.parse(cookieVal);
+                }
+            } catch (e) {
+                console.warn("Cookie parse failed", e);
+            }
+
+            // Merge local and cookie passkeys
+            let merged = [...localKeys];
+            const addUnique = (pk) => {
+                if (!merged.some(item => item.email.toLowerCase() === pk.email.toLowerCase())) {
+                    merged.push(pk);
+                }
+            };
+            cookieKeys.forEach(addUnique);
+
+            // Sync back to local storage if there's a difference
+            if (merged.length !== localKeys.length) {
+                try {
+                    localStorage.setItem('chess_passkeys', JSON.stringify(merged));
+                } catch (e) {}
+            }
+            return merged;
+        };
+
+        window.syncPasskeysForever = async () => {
+            let merged = window.getPasskeys();
+
+            // Open IndexedDB to check for more backups
+            try {
+                const dbRequest = window.indexedDB.open("ChessPasskeyVault", 1);
+                dbRequest.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains("passkeys")) {
+                        db.createObjectStore("passkeys", { keyPath: "email" });
+                    }
+                };
+                
+                dbRequest.onsuccess = (event) => {
+                    const db = event.target.result;
+                    const transaction = db.transaction("passkeys", "readonly");
+                    const store = transaction.objectStore("passkeys");
+                    const getRequest = store.getAll();
+                    
+                    getRequest.onsuccess = () => {
+                        const dbKeys = getRequest.result || [];
+                        let changed = false;
+                        dbKeys.forEach(pk => {
+                            if (!merged.some(item => item.email.toLowerCase() === pk.email.toLowerCase())) {
+                                merged.push(pk);
+                                changed = true;
+                            }
+                        });
+
+                        // Save the full merged list back everywhere
+                        window.savePasskeysState(merged);
+                    };
+                };
+            } catch (e) {
+                console.error("IndexedDB initialization or sync failed", e);
+            }
+
+            // Immediately save merged state to LocalStorage and Cookie
+            window.savePasskeysState(merged, false); // don't re-sync IndexedDB inside here to avoid loops
+        };
+
+        window.savePasskeysState = (passkeys, syncIndexedDB = true) => {
+            // 1. LocalStorage
+            try {
+                localStorage.setItem('chess_passkeys', JSON.stringify(passkeys));
+            } catch (e) {
+                console.error("Failed saving passkeys to localStorage", e);
+            }
+
+            // 2. Cookie backup (100 years expiration)
+            try {
+                setCookie('chess_passkeys_backup', JSON.stringify(passkeys), 36500);
+            } catch (e) {
+                console.error("Failed saving passkeys to cookie", e);
+            }
+
+            // 3. IndexedDB
+            if (syncIndexedDB) {
+                try {
+                    const dbRequest = window.indexedDB.open("ChessPasskeyVault", 1);
+                    dbRequest.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        if (!db.objectStoreNames.contains("passkeys")) {
+                            db.createObjectStore("passkeys", { keyPath: "email" });
+                        }
+                    };
+                    dbRequest.onsuccess = (event) => {
+                        const db = event.target.result;
+                        const transaction = db.transaction("passkeys", "readwrite");
+                        const store = transaction.objectStore("passkeys");
+                        
+                        store.clear().onsuccess = () => {
+                            passkeys.forEach(pk => {
+                                store.put(pk);
+                            });
+                        };
+                    };
+                } catch (e) {
+                    console.error("Failed saving passkeys to IndexedDB", e);
+                }
+            }
+
+            // Render updated UI if needed
+            if (typeof window.renderRegisteredPasskeys === 'function') {
+                window.renderRegisteredPasskeys();
+            }
+        };
+
+        // Initialize synchronization
+        window.syncPasskeysForever();
+
         // --- Passkey Vault Authentication (WebAuthn / Biometric Secure Enclave) ---
         let currentPasskeyTab = 'login';
         let isPasskeyActionActive = false;
@@ -1663,6 +1807,8 @@
         };
 
         window.selectedPasskeyIndex = null;
+        window.pendingDeleteIndex = null;
+        window.pendingDeleteTimeout = null;
 
         window.selectPasskey = (index) => {
             window.selectedPasskeyIndex = index;
@@ -1673,7 +1819,7 @@
             const listEl = document.getElementById('registered-passkeys-list');
             if (!listEl) return;
 
-            const passkeys = JSON.parse(localStorage.getItem('chess_passkeys') || '[]');
+            const passkeys = window.getPasskeys();
             if (passkeys.length === 0) {
                 window.selectedPasskeyIndex = null;
                 listEl.innerHTML = `
@@ -1691,14 +1837,21 @@
             listEl.innerHTML = passkeys.map((pk, idx) => {
                 const isSelected = idx === window.selectedPasskeyIndex;
                 const borderClass = isSelected ? 'border-cyan-500 bg-cyan-900/20' : 'border-[#232731] bg-[#1E212A]/60';
+                
+                const isPendingDelete = window.pendingDeleteIndex === idx;
+                const btnClass = isPendingDelete 
+                    ? "text-[10px] bg-red-600 text-white hover:bg-red-700 px-2.5 py-1.5 rounded transition cursor-pointer font-bold animate-pulse"
+                    : "text-[10px] bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded transition cursor-pointer";
+                const btnText = isPendingDelete ? "Confirm?" : "Delete";
+                
                 return `
                 <div onclick="window.selectPasskey(${idx})" class="flex justify-between items-center ${borderClass} border rounded-lg p-2.5 hover:border-cyan-500/40 transition duration-150 cursor-pointer">
                     <div class="flex flex-col">
                         <span class="text-xs font-semibold ${isSelected ? 'text-cyan-400' : 'text-white'}">${pk.email}</span>
                         <span class="text-[9px] text-gray-500">Added: ${new Date(pk.dateAdded).toLocaleDateString()} ${pk.isSimulated ? '• Sandbox Enclave' : '• Hardware TPM'}</span>
                     </div>
-                    <button onclick="window.deletePasskey(${idx}, event)" class="text-[10px] bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded transition cursor-pointer" title="Remove Passkey">
-                        Delete
+                    <button onclick="window.deletePasskey(${idx}, event)" class="${btnClass}" title="Remove Passkey">
+                        ${btnText}
                     </button>
                 </div>
             `}).join('');
@@ -1706,12 +1859,25 @@
 
         window.deletePasskey = async (index, event) => {
             if (event) event.stopPropagation();
-            const passkeys = JSON.parse(localStorage.getItem('chess_passkeys') || '[]');
+            const passkeys = window.getPasskeys();
             const pk = passkeys[index];
             if (!pk) return;
 
-            const confirmDelete = confirm(`Are you sure you want to permanently delete the passkey for "${pk.email}"? This will delete the account and ALL saved data from the servers forever.`);
-            if (!confirmDelete) return;
+            if (window.pendingDeleteIndex !== index) {
+                // First click: activate confirm mode
+                window.pendingDeleteIndex = index;
+                if (window.pendingDeleteTimeout) clearTimeout(window.pendingDeleteTimeout);
+                window.pendingDeleteTimeout = setTimeout(() => {
+                    window.pendingDeleteIndex = null;
+                    window.renderRegisteredPasskeys();
+                }, 4000); // Reset confirmation state after 4 seconds of inactivity
+                window.renderRegisteredPasskeys();
+                return;
+            }
+
+            // Second click: confirmed! Proceed with deletion
+            window.pendingDeleteIndex = null;
+            if (window.pendingDeleteTimeout) clearTimeout(window.pendingDeleteTimeout);
 
             const deleteBtn = event ? event.currentTarget || event.target : null;
             if (deleteBtn) {
@@ -1732,7 +1898,7 @@
 
             // Remove from local device storage
             passkeys.splice(index, 1);
-            localStorage.setItem('chess_passkeys', JSON.stringify(passkeys));
+            window.savePasskeysState(passkeys);
             if (window.selectedPasskeyIndex === index) {
                 window.selectedPasskeyIndex = null;
             } else if (window.selectedPasskeyIndex > index) {
@@ -1870,7 +2036,7 @@
                     window.handleUserAuthenticated(email, pseudonymEmail, data.customToken);
 
                     // Save the passkey info locally
-                    const passkeys = JSON.parse(localStorage.getItem('chess_passkeys') || '[]');
+                    const passkeys = window.getPasskeys();
                     // Prevent duplicate email registrations on same device
                     const filtered = passkeys.filter(pk => pk.email.toLowerCase() !== email.toLowerCase());
                     filtered.push({
@@ -1881,7 +2047,7 @@
                         isSimulated: isSimulated,
                         dateAdded: Date.now()
                     });
-                    localStorage.setItem('chess_passkeys', JSON.stringify(filtered));
+                    window.savePasskeysState(filtered);
 
                     // Hide simulator & show success State
                     if (simDiv) simDiv.classList.add('hidden');
@@ -1907,7 +2073,7 @@
 
             } else {
                 // LOGIN FLOW
-                const passkeys = JSON.parse(localStorage.getItem('chess_passkeys') || '[]');
+                const passkeys = window.getPasskeys();
                 if (passkeys.length === 0) {
                     if (errorDiv) {
                         errorDiv.classList.remove('hidden');
