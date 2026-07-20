@@ -272,7 +272,7 @@ app.post('/api/auth/login-crypto', async (req, res) => {
 
 // Register Passkey
 app.post('/api/auth/register-passkey', async (req, res) => {
-    const { email, pseudonymEmail, derivedPassword } = req.body;
+    const { email, pseudonymEmail, derivedPassword, masterPasswordDerived } = req.body;
     if (!email || !pseudonymEmail || !derivedPassword) {
         return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -281,6 +281,19 @@ app.post('/api/auth/register-passkey', async (req, res) => {
         // Check if user already exists in Drizzle DB
         const existingUsers = await db.select().from(users).where(eq(users.uid, pseudonymEmail));
         if (existingUsers.length > 0) {
+            const user = existingUsers[0];
+            if (masterPasswordDerived) {
+                const checkHash = crypto.createHash('sha256').update(masterPasswordDerived).digest('hex');
+                if (user.passwordHash === checkHash) {
+                    // Valid existing password! We can update the password hash to the new passkey's derived password hash
+                    const newHash = crypto.createHash('sha256').update(derivedPassword).digest('hex');
+                    await db.update(users).set({ passwordHash: newHash }).where(eq(users.id, user.id));
+                    const customToken = generateSessionToken(pseudonymEmail, email);
+                    return res.json({ success: true, customToken });
+                } else {
+                    return res.status(401).json({ error: 'invalid-master-password' });
+                }
+            }
             return res.status(400).json({ error: 'email-already-in-use' });
         }
 

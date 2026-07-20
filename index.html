@@ -1778,6 +1778,11 @@
 
             if (errorDiv) errorDiv.classList.add('hidden');
 
+            const linkContainer = document.getElementById('passkey-link-container');
+            if (linkContainer) linkContainer.classList.add('hidden');
+            const linkPassInput = document.getElementById('passkey-link-password');
+            if (linkPassInput) linkPassInput.value = '';
+
             if (tab === 'login') {
                 if (tabLogin) {
                     tabLogin.classList.add('border-cyan-500', 'text-white', 'bg-[#1A1D26]/50');
@@ -1803,6 +1808,15 @@
                 if (loginInfo) loginInfo.classList.add('hidden');
                 if (registerForm) registerForm.classList.remove('hidden');
                 if (btnText) btnText.innerText = 'Register & Create Passkey';
+            }
+        };
+
+        window.onPasskeyEmailInput = () => {
+            const linkContainer = document.getElementById('passkey-link-container');
+            if (linkContainer) linkContainer.classList.add('hidden');
+            const btnText = document.getElementById('passkey-submit-text');
+            if (btnText && currentPasskeyTab === 'register') {
+                btnText.innerText = 'Register & Create Passkey';
             }
         };
 
@@ -1931,13 +1945,31 @@
                     return;
                 }
 
+                // Check if user is linking an existing account
+                const linkContainer = document.getElementById('passkey-link-container');
+                const isLinking = linkContainer && !linkContainer.classList.contains('hidden');
+                let masterPasswordDerived = null;
+
+                if (isLinking) {
+                    const passInput = document.getElementById('passkey-link-password');
+                    const password = passInput ? passInput.value : '';
+                    if (password.length < 6) {
+                        if (errorDiv) {
+                            errorDiv.classList.remove('hidden');
+                            errorDiv.innerText = '❌ Master Password must be at least 6 characters.';
+                        }
+                        return;
+                    }
+                    masterPasswordDerived = await deriveFirebasePassword(password, email);
+                }
+
                 try {
                     isPasskeyActionActive = true;
                     if (submitBtn) submitBtn.disabled = true;
 
                     // Show visual feedback
                     if (simDiv) simDiv.classList.remove('hidden');
-                    if (simStatus) simStatus.innerText = "Initializing Hardware TPM...";
+                    if (simStatus) simStatus.innerText = isLinking ? "Verifying Master Password..." : "Initializing Hardware TPM...";
 
                     await new Promise(r => setTimeout(r, 800));
 
@@ -2013,7 +2045,7 @@
                         credentialId = btoa(String.fromCharCode.apply(null, randomBytes)).replace(/[^a-zA-Z0-9]/g, "");
                     }
 
-                    if (simStatus) simStatus.innerText = "Registering on Firebase Gateway...";
+                    if (simStatus) simStatus.innerText = isLinking ? "Linking account on Firebase Gateway..." : "Registering on Firebase Gateway...";
                     
                     const pseudonymEmail = await anonymizeEmail(email);
                     const derivedPassword = await derivePasskeyPassword(credentialId, email);
@@ -2022,7 +2054,7 @@
                     const res = await fetch('/api/auth/register-passkey', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ email, pseudonymEmail, derivedPassword })
+                        body: JSON.stringify({ email, pseudonymEmail, derivedPassword, masterPasswordDerived })
                     });
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.error || 'Passkey registration failed');
@@ -2064,7 +2096,24 @@
                     if (simDiv) simDiv.classList.add('hidden');
                     if (errorDiv) {
                         errorDiv.classList.remove('hidden');
-                        errorDiv.innerText = '❌ Error creating Passkey: ' + (err.message || String(err));
+                        let msg = err.message || String(err);
+                        if (msg.includes('email-already-in-use')) {
+                            errorDiv.innerHTML = '❌ <strong>This email is already registered in the vault.</strong><br><br>To securely link a new passkey to this account, please enter your existing <strong>Master Password</strong> below and click the button again.';
+                            // Show the link container
+                            const linkContainer = document.getElementById('passkey-link-container');
+                            if (linkContainer) {
+                                linkContainer.classList.remove('hidden');
+                            }
+                            // Update submit button text to signify linking
+                            const submitText = document.getElementById('passkey-submit-text');
+                            if (submitText) {
+                                submitText.innerText = "Verify Password & Link Passkey";
+                            }
+                        } else if (msg.includes('invalid-master-password')) {
+                            errorDiv.innerText = '❌ Decryption failed: Invalid Master Password for this account. Please try again.';
+                        } else {
+                            errorDiv.innerText = '❌ Error creating Passkey: ' + msg;
+                        }
                     }
                 } finally {
                     isPasskeyActionActive = false;
@@ -3450,8 +3499,16 @@
                 <div id="passkey-register-form" class="hidden flex flex-col gap-3">
                     <div class="flex flex-col gap-1">
                         <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Email Address</label>
-                        <input type="email" id="passkey-email" placeholder="e.g. kasparov@chesscrypt.local" class="w-full bg-[#12141A] border border-[#2D3343] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 font-medium transition duration-150" />
+                        <input type="email" id="passkey-email" oninput="window.onPasskeyEmailInput()" placeholder="e.g. kasparov@chesscrypt.local" class="w-full bg-[#12141A] border border-[#2D3343] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 font-medium transition duration-150" />
                         <p class="text-[9px] text-gray-500">Used to identify your passkey securely during authentication.</p>
+                    </div>
+                    <!-- Master password field for linking existing accounts when email-already-in-use occurs -->
+                    <div id="passkey-link-container" class="hidden flex flex-col gap-2 bg-[#1A1D26] border border-cyan-500/30 p-3 rounded-xl mt-1">
+                        <p class="text-[10px] text-cyan-300 font-medium leading-relaxed">🔒 This email is already registered. To link a new passkey to your existing account, please enter your Master Password below:</p>
+                        <div class="flex flex-col gap-1 mt-1">
+                            <label class="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Master Password</label>
+                            <input type="password" id="passkey-link-password" placeholder="Enter your master password" class="w-full bg-[#12141A] border border-[#2D3343] rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 transition duration-150" />
+                        </div>
                     </div>
                 </div>
 
